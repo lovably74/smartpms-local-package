@@ -1,0 +1,16 @@
+[Unit]
+Description=SmartPMS (Node + Express + tRPC)
+After=network.target
+
+[Service]
+Type=simple
+WorkingDirectory=/opt/smartpms
+EnvironmentFile=-/opt/smartpms/.env
+EnvironmentFile=-/opt/smartpms/.env.deploy
+Environment=NODE_ENV=production
+ExecStart=/usr/bin/node dist/index.js
+Restart=on-failure
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target

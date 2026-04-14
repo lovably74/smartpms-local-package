@@ -1,0 +1,67 @@
+version: "3.9"
+
+services:
+  # ─────────────────────────────────────────────
+  # MySQL 8.0 데이터베이스
+  # ─────────────────────────────────────────────
+  db:
+    image: mysql:8.0
+    container_name: smartpms_db
+    restart: unless-stopped
+    environment:
+      MYSQL_ROOT_PASSWORD: smartpms_root_pw
+      MYSQL_DATABASE: smartpms
+      MYSQL_USER: smartpms_user
+      MYSQL_PASSWORD: smartpms_pass
+    ports:
+      - "3306:3306"
+    volumes:
+      - smartpms_db_data:/var/lib/mysql
+      - ./db/smartpms_data.sql:/docker-entrypoint-initdb.d/01_init.sql:ro
+    command: >
+      --character-set-server=utf8mb4
+      --collation-server=utf8mb4_unicode_ci
+      --default-authentication-plugin=mysql_native_password
+    healthcheck:
+      test: ["CMD", "mysqladmin", "ping", "-h", "localhost", "-u", "root", "-psmartpms_root_pw"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  # ─────────────────────────────────────────────
+  # SmartPMS 애플리케이션
+  # ─────────────────────────────────────────────
+  app:
+    build:
+      context: ./smartpms
+      dockerfile: Dockerfile
+    container_name: smartpms_app
+    restart: unless-stopped
+    depends_on:
+      db:
+        condition: service_healthy
+    ports:
+      - "3000:3000"
+    environment:
+      NODE_ENV: production
+      DATABASE_URL: mysql://smartpms_user:smartpms_pass@db:3306/smartpms
+      JWT_SECRET: local-dev-jwt-secret-change-in-production
+      # Manus OAuth는 로컬에서 사용 불가 → 로컬 개발 모드로 우회
+      VITE_APP_ID: local
+      OAUTH_SERVER_URL: http://localhost:3000
+      VITE_OAUTH_PORTAL_URL: http://localhost:3000
+      OWNER_OPEN_ID: local-owner
+      OWNER_NAME: 로컬관리자
+      # 아래 항목은 Manus 플랫폼 전용 (로컬에서는 빈 값으로 설정)
+      BUILT_IN_FORGE_API_URL: ""
+      BUILT_IN_FORGE_API_KEY: ""
+      VITE_FRONTEND_FORGE_API_KEY: ""
+      VITE_FRONTEND_FORGE_API_URL: ""
+      VITE_ANALYTICS_ENDPOINT: ""
+      VITE_ANALYTICS_WEBSITE_ID: ""
+    volumes:
+      - smartpms_uploads:/app/uploads
+
+volumes:
+  smartpms_db_data:
+  smartpms_uploads:

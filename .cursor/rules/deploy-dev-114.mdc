@@ -1,0 +1,18 @@
+---
+description: SmartPMS 개발 서버 배포 — 코드 변경 후 반영
+globs: smartpms/**/*
+alwaysApply: false
+---
+
+# 개발 서버 배포 (192.168.0.114)
+
+`smartpms` 앱·프론트·백엔드 코드를 수정한 작업이 끝나면 **항상** 아래로 개발 서버에 배포한다. 기본은 `-UploadEnv` 없이 실행해 서버 `/opt/smartpms/.env`(DB 등)를 덮어쓰지 않는다.
+
+```powershell
+Set-Location "<repo-root>"
+powershell -ExecutionPolicy Bypass -File .\scripts\deploy-to-ubuntu.ps1 -Server 192.168.0.114 -User root
+```
+
+SSH 키: 사용자 프로필 `.ssh\id_ed25519_smartpms_roit` (스크립트 기본값).
+
+상세: `docs/UBUNTU_WBS_DEPLOY.md`
