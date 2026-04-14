@@ -9,5 +9,6 @@ if [[ -f /tmp/smartpms.env.upload ]]; then
   mv /tmp/smartpms.env.upload /opt/smartpms/.env
 fi
 cd /opt/smartpms
+sed -i 's/\r$//' scripts/deploy/remote-install.sh 2>/dev/null || true
 chmod +x scripts/deploy/remote-install.sh
 exec bash scripts/deploy/remote-install.sh
