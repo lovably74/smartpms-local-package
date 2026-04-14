@@ -1,6 +1,8 @@
 # 로컬 임시·스냅샷 (저장소에 포함하지 않음)
 tmp/
 .snapshots/
+node_modules/
+debug*.log
 
 # 환경 변수 파일 (루트·하위; 예외는 ! 로 명시)
 .env
