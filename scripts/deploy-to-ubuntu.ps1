@@ -92,4 +92,4 @@ if ($LASTEXITCODE -ne 0) { throw "scp bootstrap failed" }
 & ssh @SshCmd "sed -i 's/\r$//' /tmp/remote-bootstrap.sh 2>/dev/null; chmod +x /tmp/remote-bootstrap.sh; exec bash /tmp/remote-bootstrap.sh"
 if ($LASTEXITCODE -ne 0) { throw "remote install failed" }
 
-Write-Host "[5/5] Done. Open http://wbs.smartpms.net:5443 (Nginx). Node API: 127.0.0.1:8090 only."
+Write-Host "[5/5] Done. Open https://wbs.smartpms.net:5443 or http://wbs.smartpms.net:5080 (Nginx). Node API: 127.0.0.1:8090 only."

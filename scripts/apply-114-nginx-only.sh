@@ -72,7 +72,7 @@ echo "[6] TLS"
 export SMARTPMS_SSL_IP=192.168.0.114
 bash /opt/smartpms/scripts/deploy/generate-selfsigned-ssl.sh
 
-echo "[7] Nginx 5443"
+echo "[7] Nginx 5443(HTTPS) + 5080(HTTP)"
 cat > /etc/nginx/conf.d/smartpms-wbs.conf <<NGX
 server {
     listen 5443 ssl http2;
@@ -83,6 +83,23 @@ server {
     ssl_protocols       TLSv1.2 TLSv1.3;
     ssl_session_cache   shared:SSL:10m;
     ssl_session_timeout 1d;
+
+    client_max_body_size 50m;
+
+    location / {
+        proxy_pass http://127.0.0.1:${NODE_BACKEND_PORT};
+        proxy_http_version 1.1;
+        proxy_set_header Host \$host;
+        proxy_set_header X-Real-IP \$remote_addr;
+        proxy_set_header X-Forwarded-For \$proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto \$scheme;
+        proxy_read_timeout 86400;
+    }
+}
+
+server {
+    listen 5080;
+    server_name wbs.smartpms.net;
 
     client_max_body_size 50m;
 
@@ -110,5 +127,6 @@ systemctl restart smartpms
 
 echo "[9] Done"
 systemctl is-active nginx smartpms
-ss -tlnp | grep -E ":80 |:5443|:8090" || true
+ss -tlnp | grep -E ":80 |:5443|:5080|:8090" || true
 curl -skI https://127.0.0.1:5443/ | head -5
+curl -sI http://127.0.0.1:5080/ | head -5

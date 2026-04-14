@@ -47,4 +47,4 @@ pnpm run build
 systemctl enable smartpms
 systemctl restart smartpms
 
-echo "OK: smartpms.service 및 Nginx(5443) 적용됨. systemctl status smartpms"
+echo "OK: smartpms.service 및 Nginx(5443 HTTPS, 5080 HTTP) 적용됨. systemctl status smartpms"

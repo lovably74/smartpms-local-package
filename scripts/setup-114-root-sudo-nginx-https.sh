@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # Run ONCE on server: sudo bash setup-114-root-sudo-nginx-https.sh
-# Configures: ddzzang NOPASSWD sudo, root SSH (key), Nginx HTTPS :5443, SmartPMS in /opt
+# Configures: ddzzang NOPASSWD sudo, root SSH (key), Nginx HTTPS :5443 + HTTP :5080, SmartPMS in /opt
 set -euo pipefail
 
 if [[ "${EUID:-0}" -ne 0 ]]; then
@@ -84,7 +84,7 @@ cp -f .env.deploy .env.production.local
 pnpm install --frozen-lockfile
 pnpm run build
 
-echo "[7/8] TLS + Nginx :5443 -> 127.0.0.1:${NODE_BACKEND_PORT}"
+echo "[7/8] TLS + Nginx :5443 and HTTP :5080 -> 127.0.0.1:${NODE_BACKEND_PORT}"
 export SMARTPMS_SSL_IP="${SMARTPMS_IP}"
 bash /opt/smartpms/scripts/deploy/generate-selfsigned-ssl.sh
 
@@ -112,6 +112,23 @@ server {
         proxy_read_timeout 86400;
     }
 }
+
+server {
+    listen 5080;
+    server_name wbs.smartpms.net;
+
+    client_max_body_size 50m;
+
+    location / {
+        proxy_pass http://127.0.0.1:${NODE_BACKEND_PORT};
+        proxy_http_version 1.1;
+        proxy_set_header Host \$host;
+        proxy_set_header X-Real-IP \$remote_addr;
+        proxy_set_header X-Forwarded-For \$proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto \$scheme;
+        proxy_read_timeout 86400;
+    }
+}
 NGXEOF
 chmod 0644 /etc/nginx/conf.d/smartpms-wbs.conf
 
@@ -126,4 +143,4 @@ systemctl restart smartpms
 
 echo "[8/8] Done."
 systemctl is-active smartpms nginx ssh
-ss -tlnp | grep -E ":5443|:${NODE_BACKEND_PORT}" || true
+ss -tlnp | grep -E ":5443|:5080|:${NODE_BACKEND_PORT}" || true
