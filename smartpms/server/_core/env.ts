@@ -25,4 +25,14 @@ export const ENV = {
   isProduction: process.env.NODE_ENV === "production",
   forgeApiUrl: process.env.BUILT_IN_FORGE_API_URL ?? "",
   forgeApiKey: process.env.BUILT_IN_FORGE_API_KEY ?? "",
+  geminiApiKey: process.env.GEMINI_API_KEY ?? "",
+  bookstackUrl: process.env.BOOKSTACK_URL ?? "http://wiki.smartpms.net:7080",
+  bookstackHost: process.env.BOOKSTACK_DB_HOST ?? "127.0.0.1",
+  bookstackUser: process.env.BOOKSTACK_DB_USER ?? "bookstack",
+  bookstackPassword: process.env.BOOKSTACK_DB_PASSWORD ?? "fhdlxpzm1*",
+  bookstackDbName: process.env.BOOKSTACK_DB_NAME ?? "bookstack",
+  // Google OAuth
+  googleClientId: process.env.GOOGLE_CLIENT_ID ?? "",
+  googleClientSecret: process.env.GOOGLE_CLIENT_SECRET ?? "",
+  googleCallbackUrl: process.env.GOOGLE_CALLBACK_URL ?? "",
 };

@@ -111,12 +111,20 @@ export type ResponseFormat =
   | { type: "json_schema"; json_schema: JsonSchema };
 
 const ensureArray = (
-  value: MessageContent | MessageContent[]
-): MessageContent[] => (Array.isArray(value) ? value : [value]);
+  value: MessageContent | MessageContent[] | null | undefined
+): MessageContent[] => {
+  if (value === null || value === undefined) return [];
+  return Array.isArray(value) ? value : [value];
+};
 
 const normalizeContentPart = (
   part: MessageContent
 ): TextContent | ImageContent | FileContent => {
+  // null/undefined 방어
+  if (part === null || part === undefined) {
+    return { type: "text", text: "" };
+  }
+
   if (typeof part === "string") {
     return { type: "text", text: part };
   }
@@ -152,7 +160,22 @@ const normalizeMessage = (message: Message) => {
     };
   }
 
-  const contentParts = ensureArray(message.content).map(normalizeContentPart);
+  // assistant 가 tool_calls 를 포함한 경우 content 가 null 일 수 있음
+  if ((message as any).tool_calls) {
+    return {
+      role,
+      name,
+      content: message.content ?? null,
+      tool_calls: (message as any).tool_calls,
+    };
+  }
+
+  const parts = ensureArray(message.content);
+  // 빈 content 처리
+  if (parts.length === 0) {
+    return { role, name, content: "" };
+  }
+  const contentParts = parts.map(normalizeContentPart);
 
   // If there's only text content, collapse to a single string for compatibility
   if (contentParts.length === 1 && contentParts[0].type === "text") {
@@ -209,14 +232,18 @@ const normalizeToolChoice = (
   return toolChoice;
 };
 
-const resolveApiUrl = () =>
-  ENV.forgeApiUrl && ENV.forgeApiUrl.trim().length > 0
+const resolveApiUrl = () => {
+  if (ENV.geminiApiKey) {
+    return "https://generativelanguage.googleapis.com/v1beta/openai/chat/completions";
+  }
+  return ENV.forgeApiUrl && ENV.forgeApiUrl.trim().length > 0
     ? `${ENV.forgeApiUrl.replace(/\/$/, "")}/v1/chat/completions`
     : "https://forge.manus.im/v1/chat/completions";
+};
 
 const assertApiKey = () => {
-  if (!ENV.forgeApiKey) {
-    throw new Error("OPENAI_API_KEY is not configured");
+  if (!ENV.forgeApiKey && !ENV.geminiApiKey) {
+    throw new Error("Neither OPENAI_API_KEY nor GEMINI_API_KEY is configured");
   }
 };
 
@@ -296,10 +323,7 @@ export async function invokeLLM(params: InvokeParams): Promise<InvokeResult> {
     payload.tool_choice = normalizedToolChoice;
   }
 
-  payload.max_tokens = 32768
-  payload.thinking = {
-    "budget_tokens": 128
-  }
+  payload.max_tokens = 8192;
 
   const normalizedResponseFormat = normalizeResponseFormat({
     responseFormat,
@@ -312,21 +336,73 @@ export async function invokeLLM(params: InvokeParams): Promise<InvokeResult> {
     payload.response_format = normalizedResponseFormat;
   }
 
-  const response = await fetch(resolveApiUrl(), {
-    method: "POST",
-    headers: {
-      "content-type": "application/json",
-      authorization: `Bearer ${ENV.forgeApiKey}`,
-    },
-    body: JSON.stringify(payload),
-  });
+  const headers: Record<string, string> = {
+    "content-type": "application/json",
+    authorization: `Bearer ${ENV.geminiApiKey || ENV.forgeApiKey}`,
+  };
 
-  if (!response.ok) {
-    const errorText = await response.text();
-    throw new Error(
-      `LLM invoke failed: ${response.status} ${response.statusText} – ${errorText}`
-    );
+  // 재시도 로직: 503/429 일시적 오류 시 재시도, retryDelay 파싱
+  const models = ["gemini-2.5-flash", "gemini-2.0-flash"];
+  let lastError: Error | null = null;
+
+  for (const model of models) {
+    payload.model = model;
+    for (let attempt = 0; attempt < 3; attempt++) {
+      try {
+        const response = await fetch(resolveApiUrl(), {
+          method: "POST",
+          headers,
+          body: JSON.stringify(payload),
+        });
+
+        if (response.ok) {
+          return (await response.json()) as InvokeResult;
+        }
+
+        const errorText = await response.text();
+
+        if (response.status === 429) {
+          // 할당량 초과: retryDelay 파싱
+          const retryMatch = errorText.match(/retryDelay.*?(\d+)s/);
+          const waitSec = retryMatch ? Math.min(parseInt(retryMatch[1], 10), 30) : 5 * (attempt + 1);
+
+          // 일일 할당량 완전 소진 (limit: 0) → 즉시 다음 모델로
+          if (errorText.includes('"limit": 0') || errorText.includes('PerDayPerProject')) {
+            console.warn(`LLM ${model} daily quota exhausted, trying next model...`);
+            lastError = new Error(`QUOTA_EXHAUSTED:${model}`);
+            break; // 이 모델은 더 재시도해도 의미 없음
+          }
+
+          console.warn(`LLM ${model} attempt ${attempt + 1} rate limited, waiting ${waitSec}s...`);
+          lastError = new Error(`LLM invoke failed: ${response.status} ${response.statusText} – ${errorText}`);
+          await new Promise(r => setTimeout(r, waitSec * 1000));
+          continue;
+        }
+
+        if (response.status === 503) {
+          console.warn(`LLM ${model} attempt ${attempt + 1} unavailable, retrying...`);
+          lastError = new Error(`LLM invoke failed: ${response.status} ${response.statusText} – ${errorText}`);
+          await new Promise(r => setTimeout(r, 2000 * (attempt + 1)));
+          continue;
+        }
+
+        // 그 외 오류는 즉시 throw
+        throw new Error(`LLM invoke failed: ${response.status} ${response.statusText} – ${errorText}`);
+      } catch (err) {
+        if (err instanceof Error && err.message.startsWith("LLM invoke failed:") && !err.message.includes("503") && !err.message.includes("429")) {
+          throw err;
+        }
+        lastError = err instanceof Error ? err : new Error(String(err));
+        if (lastError.message.startsWith("QUOTA_EXHAUSTED:")) break;
+      }
+    }
+    console.warn(`Model ${model} exhausted retries, trying next model...`);
   }
 
-  return (await response.json()) as InvokeResult;
+  // 할당량 소진 시 사용자 친화적 에러
+  if (lastError?.message.startsWith("QUOTA_EXHAUSTED:")) {
+    throw new Error("Gemini API 일일 사용 할당량이 초과되었습니다. 잠시 후 다시 시도하거나, Google AI Studio에서 결제를 활성화해 주세요.");
+  }
+
+  throw lastError || new Error("All LLM models failed");
 }

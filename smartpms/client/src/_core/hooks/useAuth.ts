@@ -39,6 +39,7 @@ export function useAuth(options?: UseAuthOptions) {
       }
       throw error;
     } finally {
+      sessionStorage.removeItem('localLoginDone');
       utils.auth.me.setData(undefined, null);
       await utils.auth.me.invalidate();
     }
@@ -78,29 +79,6 @@ export function useAuth(options?: UseAuthOptions) {
     logoutMutation.isPending,
     meQuery.isLoading,
     state.user,
-  ]);
-
-  useEffect(() => {
-    if (!isLocalMode) return;
-    if (localLoginAttemptedRef.current) return;
-    if (meQuery.isLoading || localLoginMutation.isPending) return;
-    if (meQuery.data) return;
-
-    localLoginAttemptedRef.current = true;
-    localLoginMutation.mutate(undefined, {
-      onSuccess: async () => {
-        await utils.auth.me.invalidate();
-      },
-      onError: () => {
-        localLoginAttemptedRef.current = false;
-      },
-    });
-  }, [
-    isLocalMode,
-    localLoginMutation,
-    meQuery.data,
-    meQuery.isLoading,
-    utils.auth.me,
   ]);
 
   return {

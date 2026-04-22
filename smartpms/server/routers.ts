@@ -22,14 +22,90 @@ import { getDb } from "./db";
 import { projects, wbsItems as wbsItemsTable, attachments as attachmentsTable } from "../drizzle/schema";
 import { eq } from "drizzle-orm";
 import { toSqlDateString } from "./_core/date";
+import { invokeLLM, Message } from "./_core/llm";
+import { geminiTools, executeTool } from "./aiTools";
 
 export const appRouter = router({
   system: systemRouter,
+  ai: router({
+    chat: publicProcedure
+      .input(z.object({
+        messages: z.array(z.any()),
+      }))
+      .mutation(async ({ input }) => {
+        try {
+          const messages = input.messages as Message[];
+
+          // 첫 번째 LLM 호출 (도구 목록 포함)
+          let result = await invokeLLM({
+            messages,
+            tools: geminiTools,
+          });
+
+          let responseMessage = result.choices[0]?.message;
+          if (!responseMessage) throw new Error("No response from LLM");
+
+          // 도구 호출 없이 바로 답변한 경우
+          if (!responseMessage.tool_calls || responseMessage.tool_calls.length === 0) {
+            const content = responseMessage.content;
+            if (typeof content === "string") return content;
+            if (Array.isArray(content)) {
+              const textItem = content.find((c: any) => c.type === "text");
+              return (textItem as any)?.text ?? "";
+            }
+            return String(content ?? "");
+          }
+
+          // 도구를 호출하는 경우 — 결과를 메시지에 추가 후 2차 호출
+          // assistant의 tool_calls 메시지: content가 null일 수 있으므로 명시적으로 처리
+          messages.push({
+            role: "assistant",
+            content: responseMessage.content ?? "",
+            tool_calls: responseMessage.tool_calls,
+          } as any);
+
+          for (const toolCall of responseMessage.tool_calls) {
+            if (toolCall.type === "function") {
+              console.log("Executing AI Tool:", toolCall.function.name, toolCall.function.arguments);
+              const executionResult = await executeTool(
+                toolCall.function.name,
+                toolCall.function.arguments
+              );
+              messages.push({
+                role: "tool",
+                content: executionResult,
+                tool_call_id: toolCall.id,
+                name: toolCall.function.name,
+              } as any);
+            }
+          }
+
+          // 두 번째 최종 LLM 호출
+          result = await invokeLLM({ messages, tools: geminiTools });
+          const finalContent = result.choices[0]?.message?.content;
+          if (typeof finalContent === "string") return finalContent;
+          if (Array.isArray(finalContent)) {
+            const textItem = finalContent.find((c: any) => c.type === "text");
+            return (textItem as any)?.text ?? "";
+          }
+          return String(finalContent ?? "");
+
+        } catch (error) {
+          console.error("AI chat error:", error instanceof Error ? error.message : error);
+          throw new TRPCError({
+            code: "INTERNAL_SERVER_ERROR",
+            message: `AI 통신 오류: ${error instanceof Error ? error.message : "알 수 없는 오류"}`,
+          });
+        }
+      }),
+  }),
   auth: router({
     me: publicProcedure.query(opts => opts.ctx.user),
     localLogin: publicProcedure.mutation(async ({ ctx }) => {
+      console.log("[Auth] localLogin called, appId:", ENV.appId, "allowLocalLogin:", ENV.allowLocalLogin);
       // 로컬 모드 + 명시적 허용 플래그에서만 우회 로그인 허용
       if (ENV.appId !== "local" || !ENV.allowLocalLogin) {
+        console.log("[Auth] localLogin REJECTED");
         throw new TRPCError({ code: "FORBIDDEN", message: "Local login is disabled" });
       }
 

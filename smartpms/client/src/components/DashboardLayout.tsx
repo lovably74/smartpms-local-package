@@ -70,12 +70,22 @@ export default function DashboardLayout({
           </div>
           <Button
             onClick={() => {
-              window.location.href = getLoginUrl();
+              window.location.href = "/api/auth/google/login";
             }}
             size="lg"
             className="w-full shadow-lg hover:shadow-xl transition-all"
           >
-            Sign in
+            Google 계정으로 로그인
+          </Button>
+          <Button
+            onClick={() => {
+              window.location.href = "/api/auth/local/login";
+            }}
+            size="lg"
+            variant="outline"
+            className="w-full"
+          >
+            관리자 로그인
           </Button>
         </div>
       </div>

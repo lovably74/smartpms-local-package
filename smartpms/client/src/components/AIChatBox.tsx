@@ -129,6 +129,25 @@ export function AIChatBox({
   // Filter out system messages
   const displayMessages = messages.filter((msg) => msg.role !== "system");
 
+  // Make links in assistant messages open in new tab
+  const messagesContainerRef = useRef<HTMLDivElement>(null);
+  useEffect(() => {
+    if (!messagesContainerRef.current) return;
+    const links = messagesContainerRef.current.querySelectorAll('.prose a[href]');
+    links.forEach((link) => {
+      link.setAttribute('target', '_blank');
+      link.setAttribute('rel', 'noopener noreferrer');
+      // 한글 앵커(#) 디코딩: 브라우저가 인코딩한 %XX를 원본 한글로 복원
+      const href = link.getAttribute('href') || '';
+      if (href.includes('#')) {
+        const [base, hash] = href.split('#');
+        try {
+          link.setAttribute('href', base + '#' + decodeURIComponent(hash));
+        } catch {}
+      }
+    });
+  }, [displayMessages]);
+
   // Calculate min-height for last assistant message to push user message to top
   const [minHeightForLastMessage, setMinHeightForLastMessage] = useState(0);
 
@@ -165,8 +184,11 @@ export function AIChatBox({
     }
   };
 
-  const handleSubmit = (e: React.FormEvent) => {
-    e.preventDefault();
+  const handleSubmit = (e?: React.FormEvent | React.KeyboardEvent | React.MouseEvent) => {
+    if (e) {
+      e.preventDefault();
+      e.stopPropagation();
+    }
     const trimmedInput = input.trim();
     if (!trimmedInput || isLoading) return;
 
@@ -183,6 +205,7 @@ export function AIChatBox({
   const handleKeyDown = (e: React.KeyboardEvent<HTMLTextAreaElement>) => {
     if (e.key === "Enter" && !e.shiftKey) {
       e.preventDefault();
+      e.stopPropagation();
       handleSubmit(e);
     }
   };
@@ -211,7 +234,12 @@ export function AIChatBox({
                   {suggestedPrompts.map((prompt, index) => (
                     <button
                       key={index}
-                      onClick={() => onSendMessage(prompt)}
+                      type="button"
+                      onClick={(e) => {
+                        e.preventDefault();
+                        e.stopPropagation();
+                        onSendMessage(prompt);
+                      }}
                       disabled={isLoading}
                       className="rounded-lg border border-border bg-card px-4 py-2 text-sm transition-colors hover:bg-accent disabled:cursor-not-allowed disabled:opacity-50"
                     >
@@ -224,7 +252,7 @@ export function AIChatBox({
           </div>
         ) : (
           <ScrollArea className="h-full">
-            <div className="flex flex-col space-y-4 p-4">
+            <div ref={messagesContainerRef} className="flex flex-col space-y-4 p-4">
               {displayMessages.map((message, index) => {
                 // Apply min-height to last message only if NOT loading (when loading, the loading indicator gets it)
                 const isLastMessage = index === displayMessages.length - 1;
@@ -303,9 +331,8 @@ export function AIChatBox({
       </div>
 
       {/* Input Area */}
-      <form
-        ref={inputAreaRef}
-        onSubmit={handleSubmit}
+      <div
+        ref={inputAreaRef as any}
         className="flex gap-2 p-4 border-t bg-background/50 items-end"
       >
         <Textarea
@@ -318,7 +345,8 @@ export function AIChatBox({
           rows={1}
         />
         <Button
-          type="submit"
+          type="button"
+          onClick={handleSubmit}
           size="icon"
           disabled={!input.trim() || isLoading}
           className="shrink-0 h-[38px] w-[38px]"
@@ -329,7 +357,7 @@ export function AIChatBox({
             <Send className="size-4" />
           )}
         </Button>
-      </form>
+      </div>
     </div>
   );
 }
