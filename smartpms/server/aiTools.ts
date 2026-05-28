@@ -112,7 +112,7 @@ export async function searchWiki(keyword: string): Promise<string> {
 async function getUserNameMap(db: any, userIds: number[]): Promise<Map<number, string>> {
   const map = new Map<number, string>();
   if (userIds.length === 0) return map;
-  const uniqueIds = [...new Set(userIds.filter(Boolean))];
+  const uniqueIds = userIds.filter((v, i, a) => Boolean(v) && a.indexOf(v) === i);
   if (uniqueIds.length === 0) return map;
   const rows = await db.select({ id: usersTable.id, name: usersTable.name }).from(usersTable).where(inArray(usersTable.id, uniqueIds));
   for (const r of rows) map.set(r.id, r.name ?? "미지정");
@@ -436,6 +436,103 @@ export async function getDelayedTasks(projectId: number): Promise<string> {
 
 // --- Gemini Tools Definition ---
 
+// --- 추가 도구: 계획공정률 산정 ---
+export async function getPlannedProgress(projectId: number, wbsCode?: string): Promise<string> {
+  try {
+    const db = await getDb();
+    if (!db) return "DB 접근 불가";
+
+    let items = await db.select().from(wbsItemsTable)
+      .where(eq(wbsItemsTable.projectId, projectId));
+
+    // 특정 WBS 코드 하위만 필터링
+    let scopeName = "프로젝트 전체";
+    if (wbsCode) {
+      const parent = items.find(i => i.wbsCode === wbsCode);
+      if (!parent) return `WBS 코드 '${wbsCode}'를 찾을 수 없습니다.`;
+      scopeName = `[${parent.wbsCode}] ${parent.name}`;
+      // 하위 항목 수집 (재귀)
+      const collectChildIds = (id: number): number[] => {
+        const children = items.filter(i => i.parentId === id);
+        return [id, ...children.flatMap(c => collectChildIds(c.id))];
+      };
+      const targetIds = collectChildIds(parent.id);
+      items = items.filter(i => targetIds.includes(i.id));
+    }
+
+    const today = new Date();
+    const todayStr = today.toISOString().substring(0, 10);
+
+    // 계획공정률 계산 함수
+    const calcPlannedRate = (targetItems: typeof items) => {
+      const tasksWithPlan = targetItems.filter(i => i.planStart && i.planEnd);
+      if (tasksWithPlan.length === 0) return { rate: 0, start: "-", end: "-", totalDays: 0, elapsedDays: 0 };
+
+      const starts = tasksWithPlan.map(i => String(i.planStart).substring(0, 10)).sort();
+      const ends = tasksWithPlan.map(i => String(i.planEnd).substring(0, 10)).sort();
+      const earliestStart = starts[0];
+      const latestEnd = ends[ends.length - 1];
+
+      const startDate = new Date(earliestStart);
+      const endDate = new Date(latestEnd);
+      const totalDays = Math.max(1, Math.floor((endDate.getTime() - startDate.getTime()) / (1000 * 60 * 60 * 24)));
+      const elapsedDays = Math.floor((today.getTime() - startDate.getTime()) / (1000 * 60 * 60 * 24));
+      const rate = Math.min(100, Math.max(0, (elapsedDays / totalDays) * 100));
+
+      return { rate: Math.round(rate * 10) / 10, start: earliestStart, end: latestEnd, totalDays, elapsedDays: Math.max(0, elapsedDays) };
+    };
+
+    // 전체 계획공정률
+    const overall = calcPlannedRate(items);
+    const actualProgress = items.filter(i => i.level === "task").length > 0
+      ? (items.filter(i => i.level === "task").reduce((s, t) => s + (t.progress ?? 0), 0) / items.filter(i => i.level === "task").length)
+      : 0;
+
+    let response = `[계획공정률 분석] (기준일: ${todayStr})\n`;
+    response += `\n▶ ${scopeName}\n`;
+    response += `  계획공정률: ${overall.rate}% (계획기간: ${overall.start} ~ ${overall.end}, ${overall.totalDays}일 중 ${overall.elapsedDays}일 경과)\n`;
+    response += `  실적공정률: ${Math.round(actualProgress * 10) / 10}%\n`;
+    response += `  차이: ${Math.round((actualProgress - overall.rate) * 10) / 10}% (${actualProgress >= overall.rate ? "정상" : "⚠️ 지연"})\n`;
+
+    // 레벨별 계획공정률
+    const levels: Array<{ key: string; label: string }> = [
+      { key: "major", label: "대공종" },
+      { key: "middle", label: "중공종" },
+      { key: "minor", label: "소공종" },
+      { key: "activity", label: "액티비티" },
+    ];
+
+    for (const { key, label } of levels) {
+      const levelItems = items.filter(i => i.level === key);
+      if (levelItems.length === 0) continue;
+
+      response += `\n▶ ${label}별 계획공정률\n`;
+      for (const item of levelItems) {
+        // 해당 항목의 하위 테스크 기준
+        const collectChildIds = (id: number): number[] => {
+          const children = items.filter(i => i.parentId === id);
+          return [id, ...children.flatMap(c => collectChildIds(c.id))];
+        };
+        const childIds = collectChildIds(item.id);
+        const childItems = items.filter(i => childIds.includes(i.id));
+        const planned = calcPlannedRate(childItems);
+        const childTasks = childItems.filter(i => i.level === "task");
+        const actual = childTasks.length > 0
+          ? Math.round((childTasks.reduce((s, t) => s + (t.progress ?? 0), 0) / childTasks.length) * 10) / 10
+          : 0;
+        const diff = Math.round((actual - planned.rate) * 10) / 10;
+        const status = diff >= 0 ? "정상" : "⚠️지연";
+        response += `  - [${item.wbsCode}] ${item.name}: 계획 ${planned.rate}% / 실적 ${actual}% (${diff >= 0 ? "+" : ""}${diff}%, ${status})\n`;
+      }
+    }
+
+    return response;
+  } catch (error) {
+    console.error("Planned Progress Error:", error);
+    return `계획공정률 조회 오류: ${(error as Error).message}`;
+  }
+}
+
 export const geminiTools: any[] = [
   {
     type: "function",
@@ -535,6 +632,21 @@ export const geminiTools: any[] = [
       },
     },
   },
+  {
+    type: "function",
+    function: {
+      name: "getPlannedProgress",
+      description: "계획공정률을 산정합니다. 가장 빠른 계획시작일과 가장 늦은 계획종료일을 기준으로 오늘 날짜의 계획공정률을 계산합니다. 전체 프로젝트 또는 특정 WBS 코드 하위를 대상으로 하며, 대공종/중공종/소공종/액티비티별 계획공정률과 실적공정률을 비교하여 지연 여부를 판단합니다.",
+      parameters: {
+        type: "object",
+        properties: {
+          projectId: { type: "number", description: "프로젝트 ID (기본값 1)" },
+          wbsCode: { type: "string", description: "특정 WBS 코드 하위만 조회 (생략 시 전체 프로젝트)" },
+        },
+        required: [],
+      },
+    },
+  },
 ];
 
 export async function executeTool(name: string, argsText: string): Promise<string> {
@@ -559,6 +671,8 @@ export async function executeTool(name: string, argsText: string): Promise<strin
     return await getProjectSummary(args.projectId || 1);
   } else if (name === "getDelayedTasks") {
     return await getDelayedTasks(args.projectId || 1);
+  } else if (name === "getPlannedProgress") {
+    return await getPlannedProgress(args.projectId || 1, args.wbsCode || undefined);
   }
 
   return `Unknown tool function: ${name}`;
