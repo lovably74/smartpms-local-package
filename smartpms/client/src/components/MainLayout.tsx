@@ -1,4 +1,4 @@
-import React, { useState } from "react";
+import React, { useState, useRef, useCallback } from "react";
 import { Link, useLocation } from "wouter";
 import { trpc } from "@/lib/trpc";
 import { useAuth } from "@/_core/hooks/useAuth";
@@ -31,6 +31,35 @@ export default function MainLayout({ children }: MainLayoutProps) {
   const { user, isAuthenticated, logout } = useAuth();
   const [notifOpen, setNotifOpen] = useState(false);
   const [aiPanelOpen, setAiPanelOpen] = useState(false);
+  const [aiPanelWidth, setAiPanelWidth] = useState(420);
+  const isResizingRef = useRef(false);
+
+  const handleResizeStart = useCallback((e: React.MouseEvent) => {
+    e.preventDefault();
+    isResizingRef.current = true;
+    const startX = e.clientX;
+    const startWidth = aiPanelWidth;
+
+    const handleMouseMove = (e: MouseEvent) => {
+      if (!isResizingRef.current) return;
+      const diff = startX - e.clientX;
+      const newWidth = Math.min(800, Math.max(300, startWidth + diff));
+      setAiPanelWidth(newWidth);
+    };
+
+    const handleMouseUp = () => {
+      isResizingRef.current = false;
+      document.removeEventListener("mousemove", handleMouseMove);
+      document.removeEventListener("mouseup", handleMouseUp);
+      document.body.style.cursor = "";
+      document.body.style.userSelect = "";
+    };
+
+    document.addEventListener("mousemove", handleMouseMove);
+    document.addEventListener("mouseup", handleMouseUp);
+    document.body.style.cursor = "col-resize";
+    document.body.style.userSelect = "none";
+  }, [aiPanelWidth]);
   const [sidebarOpen, setSidebarOpen] = useState(true);
   const [selectedProjectId, setSelectedProjectId] = useState<number>(1);
 
@@ -227,9 +256,14 @@ export default function MainLayout({ children }: MainLayoutProps) {
         </main>
       </div>
 
-      {/* AI Chat Side Panel - 메인 콘텐츠 옆에 나란히 표시 */}
+      {/* AI Chat Side Panel - 메인 콘텐츠 옆에 나란히 표시 (리사이즈 가능) */}
       {aiPanelOpen && (
-        <div className="w-[420px] flex-shrink-0 border-l border-border flex flex-col bg-card">
+        <div className="flex-shrink-0 border-l border-border flex flex-col bg-card relative" style={{ width: aiPanelWidth }}>
+          {/* 리사이즈 핸들 */}
+          <div
+            onMouseDown={handleResizeStart}
+            className="absolute left-0 top-0 bottom-0 w-1 cursor-col-resize hover:bg-blue-400 active:bg-blue-500 transition-colors z-10"
+          />
           <div className="px-4 py-3 border-b flex items-center justify-between bg-muted/30 flex-shrink-0">
             <div className="flex items-center gap-2">
               <Sparkles className="w-5 h-5 text-blue-500" />
