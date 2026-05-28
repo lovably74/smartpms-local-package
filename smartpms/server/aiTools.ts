@@ -364,6 +364,76 @@ export async function getProjectSummary(projectId: number): Promise<string> {
   }
 }
 
+// --- 추가 도구: 지연 테스크 조회 ---
+export async function getDelayedTasks(projectId: number): Promise<string> {
+  try {
+    const db = await getDb();
+    if (!db) return "DB 접근 불가";
+
+    const allItems = await db.select().from(wbsItemsTable)
+      .where(eq(wbsItemsTable.projectId, projectId));
+
+    const today = new Date().toISOString().substring(0, 10);
+
+    // 지연 판단: 계획종료일 < 오늘 && 상태가 completed가 아닌 테스크/액티비티
+    const delayed = allItems.filter(item => {
+      if (item.status === "completed") return false;
+      if (!item.planEnd) return false;
+      const planEnd = String(item.planEnd).substring(0, 10);
+      return planEnd < today;
+    });
+
+    if (delayed.length === 0) return `프로젝트에 지연된 항목이 없습니다. (기준일: ${today})`;
+
+    const userIds = delayed.flatMap(i => [i.assigneeId, i.managerId].filter(Boolean) as number[]);
+    const nameMap = await getUserNameMap(db, userIds);
+
+    // 지연일수 계산
+    const calcDelayDays = (planEnd: any) => {
+      const end = new Date(String(planEnd).substring(0, 10));
+      const now = new Date(today);
+      return Math.floor((now.getTime() - end.getTime()) / (1000 * 60 * 60 * 24));
+    };
+
+    // 지연일수 내림차순 정렬
+    delayed.sort((a, b) => calcDelayDays(b.planEnd) - calcDelayDays(a.planEnd));
+
+    let response = `[지연 항목 현황] (기준일: ${today}, ${delayed.length}건)\n\n`;
+
+    const tasks = delayed.filter(i => i.level === "task");
+    const others = delayed.filter(i => i.level !== "task");
+
+    if (tasks.length > 0) {
+      response += `▶ 지연 테스크 (${tasks.length}건)\n`;
+      tasks.slice(0, 20).forEach((item) => {
+        const delayDays = calcDelayDays(item.planEnd);
+        const assignee = item.assigneeId ? nameMap.get(item.assigneeId) ?? "미지정" : "미지정";
+        const status = STATUS_KR[item.status] || item.status;
+        response += `- [${item.wbsCode}] ${item.name}\n`;
+        response += `  지연: ${delayDays}일 | 상태: ${status} | 진행률: ${item.progress}%\n`;
+        response += `  계획: ${fmtDate(item.planStart)} ~ ${fmtDate(item.planEnd)}`;
+        if (item.actualStart) response += ` | 실적시작: ${fmtDate(item.actualStart)}`;
+        response += `\n  담당자: ${assignee}\n\n`;
+      });
+    }
+
+    if (others.length > 0) {
+      response += `▶ 지연 공종/액티비티 (${others.length}건)\n`;
+      others.slice(0, 10).forEach((item) => {
+        const level = LEVEL_KR[item.level] || item.level;
+        const delayDays = calcDelayDays(item.planEnd);
+        const manager = item.managerId ? nameMap.get(item.managerId) ?? "미지정" : "미지정";
+        response += `- [${item.wbsCode}] ${item.name} (${level}) | 지연 ${delayDays}일 | ${item.progress}% | 관리자: ${manager}\n`;
+      });
+    }
+
+    return response;
+  } catch (error) {
+    console.error("Delayed Tasks Error:", error);
+    return `지연 항목 조회 오류: ${(error as Error).message}`;
+  }
+}
+
 // --- Gemini Tools Definition ---
 
 export const geminiTools: any[] = [
@@ -451,6 +521,20 @@ export const geminiTools: any[] = [
       },
     },
   },
+  {
+    type: "function",
+    function: {
+      name: "getDelayedTasks",
+      description: "현재 지연 중인 테스크와 공종을 조회합니다. 계획종료일이 오늘보다 이전이면서 미완료인 항목을 지연일수 순으로 정렬하여 보여줍니다. 담당자, 진행률, 계획일정, 실적시작일을 포함합니다.",
+      parameters: {
+        type: "object",
+        properties: {
+          projectId: { type: "number", description: "프로젝트 ID (기본값 1)" },
+        },
+        required: [],
+      },
+    },
+  },
 ];
 
 export async function executeTool(name: string, argsText: string): Promise<string> {
@@ -473,6 +557,8 @@ export async function executeTool(name: string, argsText: string): Promise<strin
     return await getTasksByAssignee(args.assigneeName || "");
   } else if (name === "getProjectSummary") {
     return await getProjectSummary(args.projectId || 1);
+  } else if (name === "getDelayedTasks") {
+    return await getDelayedTasks(args.projectId || 1);
   }
 
   return `Unknown tool function: ${name}`;
